@@ -11,7 +11,11 @@ export default function Dashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [groupTitle, setGroupTitle] = useState('');
   const [groupAmount, setGroupAmount] = useState('');
-    const [group, setGroup] = useState([]);
+  const [group, setGroup] = useState([]);
+  const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [activeTab, setActiveTab] = useState('host');
+  const [grouphost, setgrouphost]= useState()
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate('/');
@@ -29,19 +33,48 @@ export default function Dashboard() {
   const handleCreateGroup = async (e) => {
     e.preventDefault();
     const code = generateJoinCode()
-    console.log("Create Group:", { groupTitle, groupAmount });
-    const {error } = await supabase
+    const {data: newgroup,error} = await supabase
     .from('groups')
     .insert([{ host_id: user.id, title: groupTitle, amount_per_cycle: groupAmount, join_code:code  }])
     .select()
-    if (error) alert(error.message) // Returns the newly created row
-   
+    .single()// Returns the newly created row
+    if(newgroup){
+    await supabase
+    .from('slots')
+    .insert([{group_id: newgroup.id, user_id: user.id, turn_number: 1, role: 'manager' }])
+    }
+    if (error) alert(error.message) 
     setIsModalOpen(false);
     setGroupTitle('');
     setGroupAmount('');
   };
 
-  
+
+  const handleJoinGroup = async (e) => {
+    e.preventDefault();
+    console.log("Join Group Code:", joinCodeInput);
+   
+    setIsJoinModalOpen(false);
+    setJoinCodeInput('');
+  };
+
+  const handleDeleteGroup = async (groupId) => {
+    if (!window.confirm("Are you sure you want to delete this group?")) return;
+    
+    // Optimistic UI update
+    setGroup(prev => prev.filter(g => g.id !== groupId));
+
+    const { error } = await supabase
+      .from('groups')
+      .delete()
+      .eq('id', groupId);
+      
+    if (error) {
+      alert(error.message);
+      // Optional: Refetch groups if delete failed to revert optimistic update
+      fetchGroup();
+    }
+  };
 
    useEffect(() => {
     // 1. Set up the subscription
@@ -55,9 +88,17 @@ export default function Dashboard() {
           table: 'groups',
         },
         (payload) => {
-          console.log('Change received!', payload);
-          setGroup((prev) => [...prev, payload.new])
-          
+          if (payload.eventType === 'INSERT') {
+            setGroup((prev) => {
+              // Only add if it doesn't already exist
+              if (prev.some(g => g.id === payload.new.id)) return prev;
+              return [...prev, payload.new];
+            });
+          } else if (payload.eventType === 'DELETE') {
+            setGroup((prev) => prev.filter(g => g.id !== payload.old.id));
+          } else if (payload.eventType === 'UPDATE') {
+            setGroup((prev) => prev.map(g => g.id === payload.new.id ? payload.new : g));
+          }
         }
       )
       .subscribe();
@@ -105,7 +146,7 @@ export default function Dashboard() {
             </header>
 
             {/* Stats / Actions */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               {/* Create Group Card */}
               <div 
                 onClick={() => setIsModalOpen(true)}
@@ -118,11 +159,23 @@ export default function Dashboard() {
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Start tracking expenses together</p>
               </div>
 
+              {/* Join Group Card */}
+              <div 
+                onClick={() => setIsJoinModalOpen(true)}
+                className="group cursor-pointer rounded-2xl border-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-purple-500 dark:hover:border-purple-500 bg-gray-50 dark:bg-gray-800/50 hover:bg-purple-50 dark:hover:bg-purple-900/10 transition-all p-6 flex flex-col items-center justify-center text-center h-48"
+              >
+                <div className="w-12 h-12 rounded-full bg-purple-100 dark:bg-purple-900/50 flex items-center justify-center text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform mb-3">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Enter a Code</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Join an existing group</p>
+              </div>
+
               {/* Stat Card 1 */}
               <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 flex flex-col justify-between shadow-sm h-48">
                 <div>
                   <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Balance</p>
-                  <h3 className="text-3xl font-bold mt-2">$0.00</h3>
+                  <h3 className="text-3xl font-bold mt-2">₱0.00</h3>
                 </div>
                 <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
                   <span className="bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-md text-xs font-semibold">+0%</span>
@@ -144,22 +197,55 @@ export default function Dashboard() {
 
             {/* Recent Activity placeholder */}
           <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden shadow-sm">
-  <div className="px-6 py-5 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-    <h3 className="font-semibold text-lg">Your Groups</h3>
+  <div className="px-6 border-b border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <h3 className="font-semibold text-lg py-5">Your Groups</h3>
+    <div className="flex space-x-6">
+      <button
+        onClick={() => setActiveTab('host')}
+        className={`py-5 border-b-2 text-sm font-medium transition-colors ${
+          activeTab === 'host' 
+            ? 'border-blue-500 text-blue-600 dark:text-blue-400' 
+            : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+        }`}
+      >
+        Groups You Host
+      </button>
+      <button
+        onClick={() => setActiveTab('member')}
+        className={`py-5 border-b-2 text-sm font-medium transition-colors ${
+          activeTab === 'member' 
+            ? 'border-purple-500 text-purple-600 dark:text-purple-400' 
+            : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+        }`}
+      >
+        Groups You Joined
+      </button>
+    </div>
   </div>
 
-  {group.length > 0 ? (
+  {group.filter(g => activeTab === 'host' ? g.host_id === user?.id : g.host_id !== user?.id).length > 0 ? (
     <div className="divide-y divide-gray-100 dark:divide-gray-700">
-      {group.map((g) => (
+      {group.filter(g => activeTab === 'host' ? g.host_id === user?.id : g.host_id !== user?.id).map((g) => (
         <div key={g.id} className="p-6 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
           <div className="flex justify-between items-center">
             <div>
               <p className="font-bold text-blue-500">{g.title}</p>
               <p className="text-sm text-gray-500">Join Code: <span className="font-mono bg-gray-200 dark:bg-gray-700 px-1 rounded">{g.join_code}</span></p>
             </div>
-            <div className="text-right">
-              <p className="font-semibold">${g.amount_per_cycle}</p>
-              <p className="text-xs text-gray-500">per cycle</p>
+            <div className="flex items-center gap-4 text-right">
+              <div>
+                <p className="font-semibold">₱{g.amount_per_cycle}</p>
+                <p className="text-xs text-gray-500">per cycle</p>
+              </div>
+              {activeTab === 'host' && (
+                <button 
+                  onClick={() => handleDeleteGroup(g.id)}
+                  className="text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20"
+                  title="Delete Group"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -167,7 +253,7 @@ export default function Dashboard() {
     </div>
   ) : (
     <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-      <p>No groups found. Create one to get started!</p>
+      <p>{activeTab === 'host' ? 'No hosted groups found. Create one to get started!' : 'You haven\'t joined any groups yet. Enter a code to join!'}</p>
     </div>
   )}
 </div>
@@ -213,7 +299,7 @@ export default function Dashboard() {
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <span className="text-gray-500 dark:text-gray-400">$</span>
+                    <span className="text-gray-500 dark:text-gray-400">₱</span>
                   </div>
                   <input
                     id="groupAmount"
@@ -241,6 +327,58 @@ export default function Dashboard() {
                   className="flex-1 px-4 py-2.5 rounded-xl bg-linear-to-r from-blue-500 to-purple-600 text-white font-medium shadow-md shadow-blue-500/20 hover:shadow-blue-500/40 hover:-translate-y-0.5 transition-all"
                 >
                   Create Group
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Join Group Modal */}
+      {isJoinModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onClick={() => setIsJoinModalOpen(false)}></div>
+          
+          <div className="relative w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+              <h3 className="text-xl font-semibold">Join a Group</h3>
+              <button 
+                onClick={() => setIsJoinModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors p-1"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+            
+            <form onSubmit={handleJoinGroup} className="p-6 space-y-5">
+              <div className="space-y-2">
+                <label htmlFor="joinCodeInput" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Group Code
+                </label>
+                <input
+                  id="joinCodeInput"
+                  type="text"
+                  required
+                  value={joinCodeInput}
+                  onChange={(e) => setJoinCodeInput(e.target.value)}
+                  placeholder="e.g. ABCDEF"
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent shadow-sm transition-all uppercase"
+                />
+              </div>
+              
+              <div className="pt-2 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsJoinModalOpen(false)}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-linear-to-r from-purple-500 to-indigo-600 text-white font-medium shadow-md shadow-purple-500/20 hover:shadow-purple-500/40 hover:-translate-y-0.5 transition-all"
+                >
+                  Join Group
                 </button>
               </div>
             </form>
