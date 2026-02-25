@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useGroup } from '../context/GroupContext';
 import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../components/sidebar';
@@ -11,16 +12,22 @@ export default function Dashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [groupTitle, setGroupTitle] = useState('');
   const [groupAmount, setGroupAmount] = useState('');
-  const [group, setGroup] = useState([]);
+  const { group, setGroup, memberGroup, setmemberGroup, fetchGroup } = useGroup();
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [activeTab, setActiveTab] = useState('host');
-  const [grouphost, setgrouphost]= useState()
+  const [isJoining, setIsJoining] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate('/');
   };
 
+  if(!user){
+     navigate('/');
+  }
+
+  
   const generateJoinCode = () => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; 
   let result = '';
@@ -32,31 +39,74 @@ export default function Dashboard() {
 
   const handleCreateGroup = async (e) => {
     e.preventDefault();
-    const code = generateJoinCode()
-    const {data: newgroup,error} = await supabase
-    .from('groups')
-    .insert([{ host_id: user.id, title: groupTitle, amount_per_cycle: groupAmount, join_code:code  }])
-    .select()
-    .single()// Returns the newly created row
-    if(newgroup){
-    await supabase
-    .from('slots')
-    .insert([{group_id: newgroup.id, user_id: user.id, turn_number: 1, role: 'manager' }])
+    setIsCreating(true);
+    try {
+      const code = generateJoinCode()
+      const {data: newgroup,error} = await supabase
+      .from('groups')
+      .insert([{ host_id: user.id, title: groupTitle, amount_per_cycle: groupAmount, join_code:code  }])
+      .select()
+      .single()// Returns the newly created row
+      if(newgroup){
+      await supabase
+      .from('slots')
+      .insert([{group_id: newgroup.id, user_id: user.id, role: 'manager' }])
+      }
+      if (error) alert(error.message) 
+      setIsModalOpen(false);
+      setGroupTitle('');
+      setGroupAmount('');
+    } finally {
+      setIsCreating(false);
     }
-    if (error) alert(error.message) 
-    setIsModalOpen(false);
-    setGroupTitle('');
-    setGroupAmount('');
   };
 
 
   const handleJoinGroup = async (e) => {
-    e.preventDefault();
-    console.log("Join Group Code:", joinCodeInput);
-   
-    setIsJoinModalOpen(false);
-    setJoinCodeInput('');
-  };
+  e.preventDefault();
+  setIsJoining(true);
+  // 1. Fetch without .single() to avoid the crash
+
+  try{
+  const { data: groups, error: fetchError } = await supabase
+      .from('groups')
+      .select('id')
+      .eq('join_code', joinCodeInput.toUpperCase()); // No .single() here
+
+    if (fetchError) {
+      console.error(fetchError);
+      return;
+    }
+
+    // 2. Check if the array is empty
+    if (!groups || groups.length === 0) {
+      alert("Invalid Join Code. Please try again.");
+      return;
+    }
+
+    const selectedGroup = groups[0]; // Take the first match
+
+    // 3. Proceed to insert into slots
+    const { error: joinError } = await supabase
+      .from('slots')
+      .insert([{ 
+        group_id: selectedGroup.id, 
+        user_id: user.id, 
+        role: 'member' 
+      }]);
+
+    if (joinError) {
+      alert("You are already in this group or something went wrong.");
+      console.log(joinError)
+    } else {
+      setIsJoinModalOpen(false);
+      setJoinCodeInput('');
+    }
+  }finally {
+    setIsJoining(false); // Stop loading no matter what
+  }
+  
+};
 
   const handleDeleteGroup = async (groupId) => {
     if (!window.confirm("Are you sure you want to delete this group?")) return;
@@ -76,53 +126,9 @@ export default function Dashboard() {
     }
   };
 
-   useEffect(() => {
-    // 1. Set up the subscription
-    const channel = supabase
-      .channel('chanel1') // Name this anything
-      .on(
-        'postgres_changes',
-        {
-          event: '*', // Listen to INSERT, UPDATE, and DELETE
-          schema: 'public',
-          table: 'groups',
-        },
-        (payload) => {
-          if (payload.eventType === 'INSERT') {
-            setGroup((prev) => {
-              // Only add if it doesn't already exist
-              if (prev.some(g => g.id === payload.new.id)) return prev;
-              return [...prev, payload.new];
-            });
-          } else if (payload.eventType === 'DELETE') {
-            setGroup((prev) => prev.filter(g => g.id !== payload.old.id));
-          } else if (payload.eventType === 'UPDATE') {
-            setGroup((prev) => prev.map(g => g.id === payload.new.id ? payload.new : g));
-          }
-        }
-      )
-      .subscribe();
-// 3. Cleanup: Stop listening when the component unmounts
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (user) fetchGroup();
-  }, [user]);
-
-  const fetchGroup = async() =>{
-    if (!user) return;
-    const { data, error } = await supabase
-    .from('groups')
-    .select("*")
-    .eq('host_id',user.id)
-      if (error) {
-        return;
-    }
-     setGroup(data)
-  }
+  const displayedGroups = activeTab === 'host' 
+  ? group.filter(g => g.host_id === user?.id) 
+  : memberGroup;
 
   return (
     <div className="flex h-screen bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-sans">
@@ -223,9 +229,9 @@ export default function Dashboard() {
     </div>
   </div>
 
-  {group.filter(g => activeTab === 'host' ? g.host_id === user?.id : g.host_id !== user?.id).length > 0 ? (
+  {displayedGroups.length > 0 ?(
     <div className="divide-y divide-gray-100 dark:divide-gray-700">
-      {group.filter(g => activeTab === 'host' ? g.host_id === user?.id : g.host_id !== user?.id).map((g) => (
+      {displayedGroups.map((g) => (
         <div key={g.id} className="p-6 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
           <div className="flex justify-between items-center">
             <div>
@@ -324,9 +330,17 @@ export default function Dashboard() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2.5 rounded-xl bg-linear-to-r from-blue-500 to-purple-600 text-white font-medium shadow-md shadow-blue-500/20 hover:shadow-blue-500/40 hover:-translate-y-0.5 transition-all"
+                  disabled={isCreating}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-linear-to-r from-blue-500 to-purple-600 text-white font-medium shadow-md shadow-blue-500/20 hover:shadow-blue-500/40 hover:-translate-y-0.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex justify-center items-center"
                 >
-                  Create Group
+                  {isCreating ? (
+                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  ) : (
+                    'Create Group'
+                  )}
                 </button>
               </div>
             </form>
@@ -376,9 +390,17 @@ export default function Dashboard() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2.5 rounded-xl bg-linear-to-r from-purple-500 to-indigo-600 text-white font-medium shadow-md shadow-purple-500/20 hover:shadow-purple-500/40 hover:-translate-y-0.5 transition-all"
+                  disabled={isJoining}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-linear-to-r from-purple-500 to-indigo-600 text-white font-medium shadow-md shadow-purple-500/20 hover:shadow-purple-500/40 hover:-translate-y-0.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex justify-center items-center"
                 >
-                  Join Group
+                  {isJoining ? (
+                    <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  ) : (
+                    'Join Group'
+                  )}
                 </button>
               </div>
             </form>
