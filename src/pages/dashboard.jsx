@@ -18,6 +18,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('host');
   const [isJoining, setIsJoining] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate('/');
@@ -232,11 +233,20 @@ export default function Dashboard() {
   {displayedGroups.length > 0 ?(
     <div className="divide-y divide-gray-100 dark:divide-gray-700">
       {displayedGroups.map((g) => (
-        <div key={g.id} className="p-6 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
+        <div  onClick={()=> navigate('room/'+g.join_code)}  key={g.id} className="p-6 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition">
           <div className="flex justify-between items-center">
             <div>
               <p className="font-bold text-blue-500">{g.title}</p>
-              <p className="text-sm text-gray-500">Join Code: <span className="font-mono bg-gray-200 dark:bg-gray-700 px-1 rounded">{g.join_code}</span></p>
+              <div className="flex items-center gap-2 mt-1">
+                <p className="text-sm text-gray-500">Join Code: <span className="font-mono bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-800 dark:text-gray-200">{g.join_code}</span></p>
+                <button 
+                  onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(g.join_code); }}
+                  className="p-1 text-gray-400 hover:text-blue-500 focus:text-green-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-all tooltip-trigger"
+                  title="Copy Code"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-4 text-right">
               <div>
